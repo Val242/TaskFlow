@@ -1,0 +1,20 @@
+# Dependencies, including nested folders
+node_modules/
+
+# Environment files
+.env
+.env.*
+
+# Keep environment templates
+!.env.example
+
+# Build output and test coverage
+dist/
+coverage/
+
+# Logs
+*.log
+
+# Operating system files
+.DS_Store
+Thumbs.db

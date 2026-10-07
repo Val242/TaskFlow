@@ -1,242 +1,1192 @@
 # Self-Service AWS Deployment Platform
 
-A DevOps learning project that provisions temporary AWS environments, deploys a TypeScript and NestJS task API directly to EC2, and monitors the application with Prometheus and Grafana.
+A DevOps-focused platform for provisioning temporary AWS environments, deploying a backend application, and providing automated monitoring, alerting, and environment lifecycle management.
 
-**Status:** Architecture and implementation plan. The infrastructure, workflows, and monitoring described below are intended behavior and have not yet been implemented or verified.
+The project is designed to demonstrate how a software application can move from source code to a repeatable AWS environment through Infrastructure as Code, CI/CD, Linux service management, observability, and automated infrastructure lifecycle management.
 
-## Project scope
+---
 
-The project focuses on backend development, infrastructure automation, continuous delivery, monitoring, and environment cleanup. Services run directly on Linux without Docker. API clients use a browser for GET requests, Postman, or curl; a frontend is outside the initial scope.
+## Overview
 
-The initial design uses one AWS region, one application EC2 instance per environment, private RDS PostgreSQL, and a shared monitoring EC2 instance. This is a learning architecture with single points of failure, not a highly available production deployment.
+The platform provides a self-service workflow for creating temporary application environments on AWS.
 
-## Technology stack
+An environment consists of an application EC2 instance running:
 
-| Component | Technology | Purpose |
-| --- | --- | --- |
-| Backend | TypeScript, NestJS, Node.js | Serve the task API |
-| Database access | Prisma | Query PostgreSQL and manage schema migrations |
-| Database | Amazon RDS PostgreSQL | Persist task data privately |
-| Reverse proxy | Nginx | Terminate HTTPS and forward requests to NestJS |
-| Process management | systemd | Start services at boot and restart failed processes |
-| Infrastructure | Terraform | Provision repeatable AWS environments |
-| CI/CD | GitHub Actions | Check code, package releases, and deploy |
-| Deployment transport | AWS Systems Manager and S3 | Execute deployment commands and deliver release packages |
-| Credentials | AWS Secrets Manager and IAM roles | Supply runtime secrets and AWS permissions |
-| Host metrics | Node Exporter | Expose Linux system metrics |
-| Metrics storage | Prometheus | Scrape and store time-series metrics |
-| Dashboards | Grafana | Query Prometheus and visualize metrics |
-| Alert routing | Alertmanager | Group and route Prometheus alerts |
-| Security checks | Gitleaks and dependency scanning | Detect exposed secrets and vulnerable dependencies |
+* A NestJS backend
+* PostgreSQL
+* Nginx
+* systemd
+* Node Exporter
 
-## Architecture diagram
+A separate monitoring EC2 instance provides shared observability through:
 
-Arrows show the component initiating a connection. Prometheus initiates scraping; exporters return metrics in the response.
+* Prometheus
+* Grafana
+* Alertmanager
+* Node Exporter
 
-```mermaid
+Infrastructure is provisioned using Terraform, while GitHub Actions automates application checks, deployment, environment creation, destruction, and cleanup.
+
+AWS Systems Manager is used for deployment and administrative access without requiring publicly exposed SSH access.
+
+The project intentionally does not use Docker or container orchestration. Applications run directly on Linux to provide hands-on experience with EC2, systemd, networking, service management, deployment automation, and monitoring.
+
+---
+
+# Project Goals
+
+The primary goals are to demonstrate:
+
+* Infrastructure as Code with Terraform
+* AWS networking and security
+* Linux server administration
+* Backend deployment on EC2
+* PostgreSQL administration
+* CI/CD with GitHub Actions
+* AWS IAM and GitHub OIDC
+* AWS Systems Manager
+* systemd service management
+* Reverse proxy configuration with Nginx
+* Application and infrastructure monitoring
+* Prometheus metrics
+* Grafana dashboards
+* Alertmanager alerting
+* Temporary environment provisioning
+* Environment isolation
+* Automated environment expiration and cleanup
+
+The backend application is intentionally simple. The main focus of the project is the **engineering infrastructure around the application**.
+
+---
+
+# Architecture
+
+```mermaid id="6x3r8v"
 flowchart TD
-    U["API client"]
-    O["Operator"]
-    subgraph VPC["AWS VPC"]
-        subgraph APP["Application EC2 - public subnet"]
-            N["Nginx - HTTPS 443"]
-            A["NestJS - port 3000"]
-            E["Node Exporter - port 9100"]
-        end
-        D["Private RDS PostgreSQL - port 5432"]
-        subgraph MON["Shared monitoring EC2"]
-            G["Grafana - localhost 3000"]
-            P["Prometheus - localhost 9090"]
-            M["Alertmanager - localhost 9093"]
+
+    USER["API Client"]
+
+    subgraph AWS["AWS"]
+
+        subgraph VPC["VPC"]
+
+            subgraph APP["Application EC2"]
+                NGINX["Nginx"]
+                API["NestJS API"]
+                DB["PostgreSQL"]
+                SYSTEMD["systemd"]
+                NODE1["Node Exporter"]
+            end
+
+            subgraph MON["Monitoring EC2"]
+                PROM["Prometheus"]
+                GRAFANA["Grafana"]
+                ALERT["Alertmanager"]
+                NODE2["Node Exporter"]
+            end
         end
     end
-    U -->|"HTTPS"| N
-    N -->|"Local HTTP forwarding"| A
-    A -->|"PostgreSQL with TLS"| D
-    P -->|"Private HTTP scrape: 3000/metrics"| A
-    P -->|"Private HTTP scrape: 9100/metrics"| E
-    G -->|"PromQL queries"| P
-    P -->|"Firing and resolved alerts"| M
-    O -->|"Systems Manager port forwarding"| G
+
+    USER -->|"HTTPS"| NGINX
+    NGINX -->|"HTTP"| API
+    API -->|"Prisma"| DB
+
+    PROM -->|"Scrape /metrics"| API
+    PROM -->|"Scrape :9100"| NODE1
+    PROM -->|"Scrape :9100"| NODE2
+
+    GRAFANA -->|"PromQL"| PROM
+    PROM -->|"Alerts"| ALERT
+
+    SYSTEMD -->|"Manages"| API
 ```
 
-Grafana and NestJS can both use port 3000 because they run on different EC2 instances.
+---
 
-## User request flow
+# Application Architecture
 
-1. The client resolves the API hostname and sends an HTTPS request on port 443.
-2. The application security group permits the request from the intended clients.
-3. Nginx receives the request and terminates TLS using a valid certificate for the hostname.
-4. Nginx forwards API traffic to NestJS on the same instance, using port 3000.
-5. NestJS validates the request and executes the relevant application logic.
-6. If data is required, Prisma connects to private RDS PostgreSQL on port 5432.
-7. NestJS returns a response through Nginx to the client.
+The backend is a TypeScript/NestJS task management API.
 
-Opening port 443 only permits traffic; Nginx must also be configured to listen on that port with a certificate. Port 80 may redirect HTTP requests to HTTPS. DNS, certificate issuance, and renewal must be configured as part of deployment.
+The application provides basic CRUD functionality for tasks while exposing health and monitoring endpoints required by the infrastructure.
 
-Nginx must block public requests to `/metrics`. Direct access to port 3000 is allowed only from the monitoring security group. NestJS must listen on an interface reachable through the EC2 private address for scraping, rather than exclusively on localhost.
+```text
+Client
+  │
+  │ HTTPS
+  ▼
+Nginx
+  │
+  │ HTTP
+  ▼
+NestJS
+  │
+  │ Prisma
+  ▼
+PostgreSQL
+```
 
-## Task API
+The application runs directly on the application EC2 instance.
 
-Each task contains an ID, title, optional description, status, creation timestamp, and update timestamp. Valid statuses are `TODO`, `IN_PROGRESS`, and `DONE`.
+PostgreSQL is intentionally hosted on the same EC2 instance to keep the project focused on infrastructure, deployment, and observability rather than managed database infrastructure.
 
-| Method | Endpoint | Behavior |
-| --- | --- | --- |
-| POST | `/tasks` | Create a task |
-| GET | `/tasks` | List tasks |
-| GET | `/tasks/:id` | Retrieve one task |
-| PATCH | `/tasks/:id` | Update a task |
-| DELETE | `/tasks/:id` | Delete a task |
-| GET | `/health/live` | Confirm the application process responds |
-| GET | `/health/ready` | Check application readiness, including database connectivity |
-| GET | `/metrics` | Expose Prometheus metrics privately |
+This architecture is suitable for the scope of the project but is not intended to represent a highly available production database architecture.
 
-Invalid input returns HTTP 400. A missing task returns 404. A failed readiness check returns 503. Restarting the application must not delete tasks.
+---
 
-Authentication is deferred for the initial demonstration. Use synthetic data and restrict API access to the intended testers while this is the case.
+# Technology Stack
 
-## Database connection
+## Application
 
-The application uses a PostgreSQL connection string, normally supplied as `DATABASE_URL`:
+* TypeScript
+* NestJS
+* Node.js
+* Prisma
+* PostgreSQL
+
+## Infrastructure
+
+* AWS
+* EC2
+* VPC
+* Security Groups
+* IAM
+* Terraform
+
+## Deployment
+
+* GitHub Actions
+* AWS Systems Manager
+* GitHub OIDC
+* Amazon S3
+* systemd
+* Nginx
+
+## Monitoring
+
+* Prometheus
+* Grafana
+* Alertmanager
+* Node Exporter
+
+## Security
+
+* IAM
+* GitHub OIDC
+* Gitleaks
+* Dependency vulnerability scanning
+* AWS Secrets Manager
+
+---
+
+# Functional Requirements
+
+## FR01 — Create Tasks
+
+The system shall allow clients to create tasks.
+
+```http
+POST /tasks
+```
+
+A task contains:
+
+* title
+* optional description
+* status
+
+The server generates the task ID.
+
+---
+
+## FR02 — Retrieve Tasks
+
+The system shall allow clients to retrieve tasks.
+
+```http
+GET /tasks
+GET /tasks/:id
+```
+
+The first endpoint returns a collection of tasks while the second retrieves a specific task.
+
+---
+
+## FR03 — Update and Delete Tasks
+
+Tasks can be modified or deleted.
+
+```http
+PATCH /tasks/:id
+DELETE /tasks/:id
+```
+
+---
+
+## FR04 — Request Validation
+
+The API shall validate incoming requests.
+
+Invalid requests should return:
+
+```text
+400 Bad Request
+```
+
+Requests for nonexistent tasks should return:
+
+```text
+404 Not Found
+```
+
+Supported task statuses are:
+
+```text
+TODO
+IN_PROGRESS
+DONE
+```
+
+---
+
+## FR05 — Persistent Storage
+
+Tasks shall be persisted in PostgreSQL using Prisma.
+
+Application restarts must not result in data loss.
+
+Tasks shall contain creation and update timestamps.
+
+---
+
+## FR06 — Database Migrations
+
+Database schema changes shall be managed through version-controlled Prisma migrations.
+
+Production deployments shall use migration deployment commands rather than development migration commands.
+
+---
+
+## FR07 — Health Checks
+
+The application shall expose separate liveness and readiness endpoints.
+
+### Liveness
+
+```http
+GET /health/live
+```
+
+Confirms that the application process is running.
+
+### Readiness
+
+```http
+GET /health/ready
+```
+
+Confirms that the application is capable of serving requests, including verifying database connectivity.
+
+A failed readiness check should return:
+
+```text
+503 Service Unavailable
+```
+
+---
+
+## FR08 — Application Metrics
+
+The application shall expose Prometheus-compatible metrics.
+
+```http
+GET /metrics
+```
+
+Metrics should include:
+
+* Request count
+* Request duration
+* HTTP error rates
+* Node.js runtime metrics
+* Process memory usage
+* Other relevant application metrics
+
+The metrics endpoint must not be publicly accessible.
+
+---
+
+## FR09 — Monitoring Dashboards
+
+Grafana shall provide dashboards for application and infrastructure metrics.
+
+Initial dashboards should include:
+
+* Request rate
+* HTTP 5xx percentage
+* P95 latency
+* Prometheus scrape availability
+* CPU utilization
+* Memory utilization
+* Disk utilization
+* Network utilization
+* Node.js process memory
+
+---
+
+## FR10 — Alerting
+
+Prometheus shall evaluate alert rules for important operational conditions.
+
+Examples include:
+
+* Application unavailable
+* Node Exporter unavailable
+* Elevated HTTP 5xx rate
+* High CPU usage
+* High memory usage
+* Low disk space
+
+Alertmanager shall route and manage these alerts.
+
+Alerts should support both firing and recovery states.
+
+---
+
+## FR11 — CI/CD Quality Gates
+
+GitHub Actions shall execute quality and security checks before deployment.
+
+The pipeline should include:
+
+1. Dependency installation
+2. Linting
+3. Automated tests
+4. Application build
+5. Secret scanning
+6. Dependency vulnerability scanning
+
+Failed required checks must prevent deployment.
+
+---
+
+## FR12 — Application Deployment
+
+The backend shall be deployable directly to an EC2 instance without containers.
+
+The deployment process should:
+
+1. Build the application.
+2. Package the application.
+3. Upload the release artifact.
+4. Transfer or retrieve the release on the EC2 instance.
+5. Install required dependencies.
+6. Load application configuration.
+7. Run Prisma migrations.
+8. Restart the application service.
+9. Verify application readiness.
+
+AWS Systems Manager shall be used for remote deployment operations.
+
+---
+
+## FR13 — Service Management
+
+The NestJS application shall run as a systemd service.
+
+The service should:
+
+* Start automatically after reboot.
+* Restart after an application failure.
+* Load the required runtime configuration.
+* Provide logs through the system journal.
+
+---
+
+## FR14 — Self-Service Environment Creation
+
+The platform shall provide a GitHub Actions workflow for creating temporary environments.
+
+The workflow should accept inputs such as:
+
+```text
+Environment name
+Environment lifetime
+```
+
+The workflow shall:
+
+1. Validate the inputs.
+2. Provision the environment using Terraform.
+3. Configure the application server.
+4. Deploy the backend.
+5. Configure monitoring.
+6. Return the environment information.
+
+---
+
+## FR15 — Environment Isolation
+
+Each temporary environment shall have isolated application infrastructure.
+
+Changes to one environment must not unintentionally affect another environment.
+
+Environment resources should be identifiable using AWS tags such as:
+
+```text
+project
+environment
+expiry
+```
+
+Separate Terraform state should be used for isolated environments.
+
+---
+
+## FR16 — Manual Environment Destruction
+
+The platform shall provide a workflow for manually destroying a temporary environment.
+
+Destroying an application environment must not destroy shared monitoring infrastructure.
+
+---
+
+## FR17 — Automatic Environment Cleanup
+
+The platform shall periodically identify expired environments and destroy them automatically.
+
+The cleanup process should:
+
+1. Find expired environments.
+2. Identify the corresponding infrastructure.
+3. Destroy the environment.
+4. Remove stale monitoring targets.
+
+Cleanup should be idempotent and safe to rerun.
+
+---
+
+## FR18 — Monitoring Target Lifecycle
+
+Monitoring targets shall be dynamically associated with application environments.
+
+When an environment is created:
+
+```text
+Environment Created
+        │
+        ▼
+Application EC2 Created
+        │
+        ▼
+Prometheus discovers target
+```
+
+When an environment is destroyed:
+
+```text
+Environment Destroyed
+        │
+        ▼
+Target disappears
+        │
+        ▼
+Prometheus stops scraping it
+```
+
+---
+
+# Database Architecture
+
+PostgreSQL runs on the same EC2 instance as the NestJS application.
+
+```text
+Application EC2
+│
+├── Nginx
+├── NestJS
+├── PostgreSQL
+├── systemd
+└── Node Exporter
+```
+
+The application communicates with PostgreSQL locally.
+
+Example connection:
 
 ```dotenv
-# Illustrative placeholders only; TLS settings must also be configured.
-DATABASE_URL="postgresql://app_user:YOUR_PASSWORD@YOUR_RDS_ENDPOINT:5432/tasksdb"
+DATABASE_URL="postgresql://app_user:password@localhost:5432/taskflow"
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `postgresql://` | Database protocol |
-| `app_user` | Application database user |
-| `YOUR_PASSWORD` | Database password; URL-encode reserved characters |
-| `YOUR_RDS_ENDPOINT` | AWS-provided database hostname |
-| `5432` | PostgreSQL port |
-| `tasksdb` | Application database name |
+PostgreSQL should not be publicly accessible.
 
-Configure the selected Prisma client/driver for TLS and server certificate verification using the AWS RDS CA. The example above illustrates the address and credentials, not a complete production TLS configuration.
+Port `5432` should not be exposed through the application's security group.
 
-RDS is not publicly accessible. Its security group accepts connections from the application security group only. The connection string supplies addressing and authentication; it does not bypass security groups or routing.
+Each isolated application environment has its own PostgreSQL instance and database.
 
-Store credentials in Secrets Manager. The application instance role receives permission to read only its required secret. Startup logic must explicitly retrieve and load the secret; creating a secret does not automatically inject it into Node.js. Use a restricted runtime database user, with migration permissions handled separately where practical.
+---
 
-For local development, use local PostgreSQL and an ignored `.env` file. A laptop cannot directly reach private RDS without an approved network path or tunnel.
+# Networking
 
-## Monitoring flow
+The AWS infrastructure shall use a VPC with appropriate public and private networking.
 
-### Host metrics
+The application EC2 requires public HTTPS access through Nginx.
 
-Node Exporter runs on the application EC2 instance and exposes metrics at:
+Monitoring services should remain private.
+
+Expected network access:
+
+| Resource      | Port | Access                        |
+| ------------- | ---: | ----------------------------- |
+| Nginx         |  443 | Public HTTPS                  |
+| Nginx         |   80 | HTTP redirect, if enabled     |
+| NestJS        | 3000 | Private                       |
+| PostgreSQL    | 5432 | Local application access      |
+| Node Exporter | 9100 | Monitoring EC2 only           |
+| Prometheus    | 9090 | Private                       |
+| Grafana       | 3000 | Private / SSM port forwarding |
+| Alertmanager  | 9093 | Private                       |
+
+SSH access should not be required for normal deployment.
+
+---
+
+# Security Model
+
+Security is based on least privilege and private service access.
+
+## AWS IAM
+
+IAM policies should grant only the permissions required by each component.
+
+GitHub Actions should authenticate to AWS using GitHub OIDC rather than long-lived AWS access keys.
+
+## Security Groups
+
+Security groups should restrict access between components.
+
+The following services should not be publicly exposed:
+
+* PostgreSQL
+* NestJS port `3000`
+* Node Exporter
+* Prometheus
+* Grafana
+* Alertmanager
+
+Only the required public entry point should be exposed.
+
+---
+
+# AWS Systems Manager
+
+AWS Systems Manager provides remote administration and deployment access to EC2.
+
+It removes the need to expose SSH publicly.
+
+Systems Manager will be used for:
+
+* Remote command execution
+* Application deployment
+* Operational tasks
+* Private service access through port forwarding
+
+For example, Grafana can remain bound to a private interface while an operator accesses it through an SSM tunnel.
+
+---
+
+# Infrastructure as Code
+
+Terraform manages the AWS infrastructure.
+
+The infrastructure is organized into reusable modules and environment-specific configurations.
 
 ```text
-http://APP_PRIVATE_IP:9100/metrics
+infrastructure/
+├── bootstrap/
+├── modules/
+│   ├── networking/
+│   ├── application/
+│   └── monitoring/
+├── environments/
+└── shared/
 ```
 
-Prometheus pulls CPU, memory, filesystem, disk I/O, and network metrics from this endpoint. Node Exporter measures the host; it does not automatically measure API route performance or RDS internals.
+Terraform is responsible for infrastructure such as:
 
-### Application metrics
+* VPC
+* Subnets
+* Internet connectivity
+* Route tables
+* Security groups
+* IAM
+* EC2
+* Shared monitoring infrastructure
 
-NestJS exposes a separately instrumented endpoint:
+Application-level configuration such as PostgreSQL installation, Nginx configuration, and systemd services is handled separately through configuration scripts and deployment automation.
+
+---
+
+# CI/CD Architecture
+
+The intended CI/CD flow is:
 
 ```text
-http://APP_PRIVATE_IP:3000/metrics
+Developer
+   │
+   ▼
+Git Push
+   │
+   ▼
+GitHub
+   │
+   ▼
+GitHub Actions
+   │
+   ├── Lint
+   ├── Test
+   ├── Build
+   ├── Gitleaks
+   └── Dependency Scan
+           │
+           ▼
+       AWS OIDC
+           │
+           ▼
+        AWS IAM
+           │
+           ▼
+      Systems Manager
+           │
+           ▼
+    Application EC2
 ```
 
-Simply running NestJS on port 3000 does not create metrics. Add instrumentation for request counts, duration histograms, server errors, and Node.js runtime metrics. Use normalized route labels such as `/tasks/:id`; avoid individual task IDs, user IDs, or raw URLs as labels.
+A deployment should only occur after required checks pass.
 
-Prometheus scrapes both targets on a schedule, independently of user requests. A starting scrape interval is 15 seconds. Refresh targets when temporary environments are created, replaced, or deleted, using tag-based EC2 discovery or generated target configuration.
+---
 
-### Grafana dashboards
+# Deployment Strategy
 
-Grafana uses Prometheus at `http://localhost:9090` because both services run on the monitoring instance. It queries stored metrics using PromQL and displays:
+The application is deployed directly to Linux.
 
-- Request rate by API route.
-- Percentage of HTTP 5xx responses.
-- Response time at the 95th percentile.
-- Prometheus target scrape availability.
-- Node.js process memory.
-- Host CPU, memory, disk, and network usage.
+A release follows this general flow:
 
-Scrape availability does not prove that the public HTTPS path works. Verify that path with deployment smoke tests; external probing can be added later. Application and host metrics together support scaling decisions, but high CPU alone does not determine whether horizontal or vertical scaling is appropriate.
+```text
+Source Code
+    │
+    ▼
+Build
+    │
+    ▼
+Package
+    │
+    ▼
+Artifact Storage
+    │
+    ▼
+Systems Manager
+    │
+    ▼
+Application EC2
+    │
+    ├── Extract release
+    ├── Configure environment
+    ├── Run migrations
+    ├── Restart systemd
+    └── Run smoke tests
+```
 
-### Alerts and access
+Previous releases should be retained so that application rollback is possible.
 
-Prometheus evaluates alert rules for unavailable targets and sustained server errors. Alertmanager groups alerts and routes them to a receiver configured during implementation. Test both firing and resolution behavior.
+Database rollback must be handled separately from application rollback because schema changes can have compatibility implications.
 
-Use Systems Manager port forwarding for operator access to Grafana. Bind Grafana, Prometheus, and Alertmanager to localhost when only local/tunneled access is required. Their mutual local connections do not need inbound security group rules.
+---
 
-Persist monitoring data on EBS, with configured retention. Keep dashboard definitions, alert rules, and service configuration in Git. The shared monitoring stack remains when a temporary application environment is destroyed.
+# Observability Architecture
 
-## Network and security rules
+The monitoring architecture separates metrics collection, visualization, and alerting.
 
-All listed ports use TCP.
+```text
+                 ┌───────────────┐
+                 │ Application   │
+                 │    EC2        │
+                 └───────┬───────┘
+                         │
+              ┌──────────┴──────────┐
+              │                     │
+         /metrics                :9100
+              │                     │
+              └──────────┬──────────┘
+                         │
+                         ▼
+                  ┌─────────────┐
+                  │ Prometheus  │
+                  └──────┬──────┘
+                         │
+               ┌─────────┴─────────┐
+               │                   │
+               ▼                   ▼
+          ┌─────────┐        ┌─────────────┐
+          │ Grafana │        │ Alertmanager│
+          └─────────┘        └─────────────┘
+```
 
-| Destination | Port | Allowed source | Purpose |
-| --- | --- | --- | --- |
-| Application Nginx | 443 | Intended API clients | HTTPS API access |
-| Application Nginx | 80 | Intended clients, if enabled | HTTP-to-HTTPS redirect |
-| Application NestJS | 3000 | Monitoring security group | Private application scraping |
-| Application Node Exporter | 9100 | Monitoring security group | Private host scraping |
-| RDS PostgreSQL | 5432 | Application security group | Database queries and migrations |
-| Grafana | 3000 | Localhost via tunnel | Operator dashboards |
-| Prometheus | 9090 | Localhost | Grafana queries |
-| Alertmanager | 9093 | Localhost | Prometheus alerts |
+Prometheus collects and stores metrics.
 
-Place RDS in a DB subnet group spanning private subnets in at least two Availability Zones. This subnet layout does not itself enable Multi-AZ database failover.
+Grafana visualizes metrics.
 
-The application instance uses a public subnet for direct Nginx ingress. Monitoring uses private addresses to reach exporters. The monitoring instance may use a private subnet with outbound access through NAT or suitable VPC endpoints. Decide this before provisioning because it affects cost and access to package repositories.
+Alertmanager handles alert routing.
 
-Systems Manager requires its agent, instance permissions, and outbound access to the necessary AWS endpoints. GitHub Actions deployment does not require opening SSH to the internet. Configure outbound connectivity for secrets retrieval, release downloads, and required service calls.
+Node Exporter exposes operating-system metrics.
 
-## Infrastructure and deployment flow
+NestJS exposes application-level metrics.
 
-Terraform manages networking, security groups, IAM, EC2, RDS, and supporting resources. Use remote state with locking, separate state per application environment, and separate state for shared/bootstrap infrastructure. Treat state as sensitive.
+---
 
-The intended GitHub Actions flow is:
+# Logging
 
-1. Check out the selected commit and install locked dependencies.
-2. Run linting, tests, compilation, Gitleaks, and dependency security checks.
-3. Authenticate to AWS using OIDC and a restricted role.
-4. Provision or update the selected environment through Terraform.
-5. Package the NestJS release and upload it to a restricted S3 location.
-6. Use Systems Manager to download and install the release on EC2.
-7. Load required configuration and execute Prisma migrations from inside the VPC.
-8. Restart the NestJS systemd service and run readiness and HTTPS smoke tests.
+Application logs are written to the system journal through systemd.
 
-Build for the target Linux runtime and architecture, including any Prisma runtime dependencies. Keep a previous release for application rollback. Database migrations require their own recovery strategy; rolling back code does not automatically reverse schema changes.
+Example:
 
-Systemd starts the application at boot and restarts failed processes. Application logs go to the systemd journal, with Nginx access/error logs available separately. Prometheus stores metrics, not application logs.
+```bash
+journalctl -u nestjs-api
+```
 
-## Self-service environments and cleanup
+Nginx maintains its own access and error logs.
 
-A manually triggered workflow accepts an environment name and lifetime. It validates the inputs, creates isolated application resources, deploys the API, and reports the URL. Tag resources with project, environment, and expiry time.
+Prometheus and Grafana are responsible for metrics and visualization, not application log aggregation.
 
-A scheduled workflow finds expired environments and destroys their specific Terraform state-managed resources. A manual workflow supports early deletion. Serialize provisioning and destruction for the same environment to prevent overlapping changes.
+A centralized log aggregation system is outside the initial project scope.
 
-Automatic expiry runs on the next successful scheduled check, not necessarily at the exact expiry timestamp. Temporary database data is disposable; define snapshot retention explicitly. Shared monitoring, remote state storage, and release infrastructure must remain outside temporary destruction targets.
+---
 
-## Seven-day implementation roadmap
+# Secrets Management
 
-| Day | Deliverable |
-| --- | --- |
-| 1 | NestJS task API, local PostgreSQL, Prisma migrations, and validation |
-| 2 | Tests, health endpoints, application metrics, and local monitoring |
-| 3 | Terraform networking, application EC2, IAM, and private RDS |
-| 4 | CI checks, release packaging, Systems Manager deployment, and systemd |
-| 5 | Shared monitoring EC2, dashboards, target discovery, and alerts |
-| 6 | Self-service inputs, environment isolation, manual deletion, and expiry cleanup |
-| 7 | End-to-end verification, recovery exercise, documentation, and demo |
+Secrets must never be committed to source control.
 
-## Definition of done
+Sensitive configuration may include:
 
-- A fresh environment can be provisioned and deployed through GitHub Actions.
-- Task data survives an application restart.
-- Public HTTPS works; `/metrics` and the database are not publicly exposed.
-- Prometheus scrapes both application and host metrics.
-- Grafana dashboards respond to test traffic.
-- A controlled failure triggers an alert that resolves after recovery.
-- Rebooting EC2 automatically starts the application.
-- Expiry cleanup removes only the intended temporary environment.
-- The repository contains reproducible instructions and measured deployment/recovery results.
+* PostgreSQL credentials
+* Application secrets
+* TLS credentials
+* Monitoring credentials
+* AWS-related secrets
+
+Local development uses environment variables.
+
+AWS environments should use AWS Secrets Manager where appropriate.
+
+GitHub Actions uses OIDC for AWS authentication rather than storing long-lived AWS access keys.
+
+Gitleaks is used to detect accidentally committed secrets.
+
+---
+
+# Repository Structure
+
+```text
+devops-self-service-platform/
+├── README.md
+├── .gitignore
+├── .env.example
+│
+├── app/
+│   ├── src/
+│   │   ├── main.ts
+│   │   ├── app.module.ts
+│   │   ├── tasks/
+│   │   │   ├── tasks.module.ts
+│   │   │   ├── tasks.controller.ts
+│   │   │   ├── tasks.service.ts
+│   │   │   └── dto/
+│   │   │       ├── create-task.dto.ts
+│   │   │       └── update-task.dto.ts
+│   │   ├── prisma/
+│   │   │   ├── prisma.module.ts
+│   │   │   └── prisma.service.ts
+│   │   ├── health/
+│   │   │   ├── health.module.ts
+│   │   │   └── health.controller.ts
+│   │   └── metrics/
+│   │       ├── metrics.module.ts
+│   │       ├── metrics.controller.ts
+│   │       └── metrics.interceptor.ts
+│   ├── prisma/
+│   │   ├── schema.prisma
+│   │   └── migrations/
+│   ├── test/
+│   │   └── tasks.e2e-spec.ts
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── nest-cli.json
+│   └── tsconfig.json
+│
+├── infrastructure/
+│   ├── bootstrap/
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   ├── modules/
+│   │   ├── networking/
+│   │   ├── application/
+│   │   └── monitoring/
+│   ├── environments/
+│   │   ├── main.tf
+│   │   ├── providers.tf
+│   │   ├── versions.tf
+│   │   ├── variables.tf
+│   │   ├── outputs.tf
+│   │   ├── backend.tf
+│   │   └── terraform.tfvars.example
+│   └── shared/
+│       ├── main.tf
+│       ├── providers.tf
+│       ├── versions.tf
+│       ├── variables.tf
+│       ├── outputs.tf
+│       └── backend.tf
+│
+├── configuration/
+│   ├── nginx/
+│   │   └── api.conf
+│   ├── systemd/
+│   │   ├── nestjs-api.service
+│   │   ├── node-exporter.service
+│   │   ├── prometheus.service
+│   │   └── alertmanager.service
+│   ├── prometheus/
+│   │   ├── prometheus.yml
+│   │   └── rules/
+│   │       ├── application-alerts.yml
+│   │       └── host-alerts.yml
+│   ├── grafana/
+│   │   ├── dashboards/
+│   │   │   ├── application.json
+│   │   │   └── host.json
+│   │   └── provisioning/
+│   │       ├── datasources/
+│   │       │   └── prometheus.yml
+│   │       └── dashboards/
+│   │           └── dashboards.yml
+│   └── alertmanager/
+│       └── alertmanager.yml
+│
+├── scripts/
+│   ├── setup-application.sh
+│   ├── setup-monitoring.sh
+│   ├── deploy.sh
+│   ├── load-secrets.sh
+│   ├── smoke-test.sh
+│   ├── rollback.sh
+│   └── cleanup-expired.sh
+│
+├── .github/
+│   └── workflows/
+│       ├── ci.yml
+│       ├── provision.yml
+│       ├── deploy.yml
+│       ├── destroy.yml
+│       └── cleanup-expired.yml
+│
+└── docs/
+    ├── architecture.md
+    ├── local-development.md
+    ├── deployment.md
+    └── runbooks/
+        ├── application-down.md
+        ├── database-connection.md
+        └── rollback.md
+```
+
+---
+
+# Environment Lifecycle
+
+The complete environment lifecycle is intended to be:
+
+```text
+             ┌───────────────┐
+             │ Create Request│
+             └───────┬───────┘
+                     │
+                     ▼
+              Terraform Apply
+                     │
+                     ▼
+             AWS Environment
+                     │
+                     ▼
+                Deployment
+                     │
+                     ▼
+               Verification
+                     │
+                     ▼
+                Monitoring
+                     │
+                     ▼
+             Environment Active
+                     │
+                     ▼
+                Expiration
+                     │
+                     ▼
+              Terraform Destroy
+                     │
+                     ▼
+              Environment Removed
+```
+
+Shared monitoring infrastructure remains available throughout the lifecycle.
+
+---
+
+# Failure and Recovery
+
+The platform should support basic operational recovery scenarios.
+
+Examples include:
+
+### Application process failure
+
+```text
+NestJS crashes
+     │
+     ▼
+systemd detects failure
+     │
+     ▼
+systemd restarts application
+```
+
+### Application unavailable
+
+```text
+Prometheus
+     │
+     ▼
+Target unavailable
+     │
+     ▼
+Alert rule fires
+     │
+     ▼
+Alertmanager
+```
+
+### Database unavailable
+
+```text
+NestJS
+  │
+  ▼
+PostgreSQL unavailable
+  │
+  ▼
+Readiness check fails
+  │
+  ▼
+503 Service Unavailable
+```
+
+### Expired environment
+
+```text
+Scheduled cleanup
+       │
+       ▼
+Expired environment detected
+       │
+       ▼
+Terraform destroy
+       │
+       ▼
+Temporary resources removed
+```
+
+---
+
+# Non-Goals
+
+The initial version intentionally excludes:
+
+* Docker
+* Docker Compose
+* Kubernetes
+* ECS
+* EKS
+* Fargate
+* RDS
+* Application authentication
+* Frontend development
+* Multi-region deployment
+* High availability
+* Auto Scaling Groups for the application
+* Blue/green deployment
+* Canary deployment
+* Centralized log aggregation
+* Distributed tracing
+* Complex database replication
+
+These technologies may be appropriate for larger production systems, but they are outside the scope of this project.
+
+The goal is to build a complete and understandable DevOps workflow without introducing unnecessary infrastructure complexity.
+
+---
+
+# Implementation Roadmap
+
+## Phase 1 — Backend
+
+* Create NestJS application
+* Implement task CRUD
+* Add DTO validation
+* Configure PostgreSQL
+* Configure Prisma
+* Create migrations
+* Add automated tests
+
+## Phase 2 — AWS Infrastructure
+
+* Create VPC
+* Configure subnets
+* Configure routing
+* Configure security groups
+* Create IAM roles
+* Provision application EC2
+* Provision monitoring EC2
+* Configure Systems Manager
+
+## Phase 3 — Application Deployment
+
+* Install Node.js
+* Install PostgreSQL
+* Configure database
+* Configure Nginx
+* Configure systemd
+* Package application
+* Deploy application
+* Execute Prisma migrations
+* Verify application health
+
+## Phase 4 — Observability
+
+* Add `/health/live`
+* Add `/health/ready`
+* Add `/metrics`
+* Install Node Exporter
+* Configure Prometheus
+* Configure Grafana
+* Create dashboards
+* Configure Alertmanager
+* Test alerts and recovery
+
+## Phase 5 — CI/CD
+
+* Configure GitHub Actions
+* Add linting
+* Add tests
+* Add build
+* Add Gitleaks
+* Add dependency scanning
+* Configure GitHub OIDC
+* Configure SSM deployment
+* Add smoke tests
+* Add rollback procedure
+
+## Phase 6 — Self-Service Environments
+
+* Add environment workflow inputs
+* Create isolated Terraform state
+* Provision temporary environments
+* Deploy application automatically
+* Configure monitoring targets
+* Add manual destruction workflow
+
+## Phase 7 — Lifecycle Automation
+
+* Add environment expiry
+* Add scheduled cleanup
+* Remove stale monitoring targets
+* Verify environment isolation
+* Test failure and recovery scenarios
+* Complete documentation
+
+---
+
+# Definition of Done
+
+The project is complete when the platform can:
+
+* Provision an AWS environment through Terraform.
+* Deploy the NestJS application directly to EC2.
+* Run PostgreSQL alongside the application.
+* Manage the application through systemd.
+* Serve the API through HTTPS using Nginx.
+* Persist task data using PostgreSQL and Prisma.
+* Expose application health endpoints.
+* Expose Prometheus application metrics.
+* Collect host metrics using Node Exporter.
+* Scrape application environments using Prometheus.
+* Visualize metrics through Grafana.
+* Detect operational failures through Prometheus alerts.
+* Route alerts through Alertmanager.
+* Run CI quality and security checks through GitHub Actions.
+* Authenticate GitHub Actions to AWS using OIDC.
+* Deploy through AWS Systems Manager.
+* Create isolated temporary environments.
+* Destroy environments manually.
+* Automatically remove expired environments.
+* Preserve shared monitoring infrastructure.
+* Update monitoring targets as environments are created and destroyed.
+* Demonstrate application recovery after failure.
+* Document deployment, troubleshooting, rollback, and cleanup procedures.
+
+---
+
+# Learning Outcomes
+
+This project is intended to provide practical experience with the full lifecycle of a backend service:
+
+```text
+Code
+ │
+ ▼
+Build
+ │
+ ▼
+Test
+ │
+ ▼
+Infrastructure
+ │
+ ▼
+Deploy
+ │
+ ▼
+Run
+ │
+ ▼
+Monitor
+ │
+ ▼
+Alert
+ │
+ ▼
+Recover
+ │
+ ▼
+Scale the workflow
+ │
+ ▼
+Destroy temporary infrastructure
+```
+
+The backend application provides the workload, while the surrounding infrastructure demonstrates how software is provisioned, deployed, operated, monitored, and eventually removed in a cloud environment.
+
+The final objective is a repeatable self-service platform where creating an environment is an automated engineering workflow rather than a sequence of manual server configuration steps.
+
 
 ## Reference documentation
 

@@ -27,6 +27,8 @@ crash.*.log
 # Private keys
 *.pem
 *.key
+*.pub
+/infrastructure/infrakey
 
 # Build output and test coverage
 dist/

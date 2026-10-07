@@ -5,6 +5,10 @@ node_modules/
 .env
 .env.*
 
+# Terraform variable files
+*.tfvars
+*.tfvars.json
+
 # Keep environment templates
 !.env.example
 

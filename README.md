@@ -61,47 +61,232 @@ The backend application is intentionally simple. The main focus of the project i
 
 # Architecture
 
-```mermaid id="6x3r8v"
+The platform uses separate EC2 instances for the application and each major monitoring component.
+
+The application environment runs the backend and PostgreSQL together, while Prometheus, Grafana, and Alertmanager are deployed independently. This separation isolates application workloads from monitoring workloads and allows each monitoring component to be managed independently.
+
+```mermaid
 flowchart TD
 
     USER["API Client"]
 
     subgraph AWS["AWS"]
 
-        subgraph VPC["VPC"]
+        subgraph APP["Application EC2"]
+            NGINX["Nginx"]
+            API["NestJS API"]
+            DB["PostgreSQL"]
+            SYSTEMD["systemd"]
+            NODE_APP["Node Exporter"]
+        end
 
-            subgraph APP["Application EC2"]
-                NGINX["Nginx"]
-                API["NestJS API"]
-                DB["PostgreSQL"]
-                SYSTEMD["systemd"]
-                NODE1["Node Exporter"]
-            end
+        subgraph PROM["Prometheus EC2"]
+            PROMETHEUS["Prometheus"]
+            NODE_PROM["Node Exporter"]
+        end
 
-            subgraph MON["Monitoring EC2"]
-                PROM["Prometheus"]
-                GRAFANA["Grafana"]
-                ALERT["Alertmanager"]
-                NODE2["Node Exporter"]
-            end
+        subgraph GRAFANA["Grafana EC2"]
+            GRAFANA_APP["Grafana"]
+            NODE_GRAFANA["Node Exporter"]
+        end
+
+        subgraph ALERT["Alertmanager EC2"]
+            ALERTMANAGER["Alertmanager"]
+            NODE_ALERT["Node Exporter"]
         end
     end
 
     USER -->|"HTTPS"| NGINX
     NGINX -->|"HTTP"| API
-    API -->|"Prisma"| DB
+    API -->|"Prisma / localhost"| DB
 
-    PROM -->|"Scrape /metrics"| API
-    PROM -->|"Scrape :9100"| NODE1
-    PROM -->|"Scrape :9100"| NODE2
+    PROMETHEUS -->|"Scrape /metrics"| API
+    PROMETHEUS -->|"Scrape :9100"| NODE_APP
+    PROMETHEUS -->|"Scrape :9100"| NODE_PROM
+    PROMETHEUS -->|"Scrape :9100"| NODE_GRAFANA
+    PROMETHEUS -->|"Scrape :9100"| NODE_ALERT
 
-    GRAFANA -->|"PromQL"| PROM
-    PROM -->|"Alerts"| ALERT
+    GRAFANA_APP -->|"PromQL"| PROMETHEUS
+    PROMETHEUS -->|"Alerts"| ALERTMANAGER
 
     SYSTEMD -->|"Manages"| API
 ```
 
+## Application EC2
+
+The application EC2 instance hosts the actual workload:
+
+* Nginx
+* NestJS
+* PostgreSQL
+* systemd
+* Node Exporter
+
+The request path is:
+
+```text
+Client
+   │
+   │ HTTPS
+   ▼
+Nginx
+   │
+   │ HTTP
+   ▼
+NestJS
+   │
+   │ Prisma
+   ▼
+PostgreSQL
+```
+
+PostgreSQL runs locally on the same instance as NestJS. It is not publicly exposed.
+
+Node Exporter exposes host-level metrics for Prometheus.
+
 ---
+
+## Prometheus EC2
+
+The Prometheus EC2 instance is responsible for metrics collection and alert evaluation.
+
+It runs:
+
+* Prometheus
+* Node Exporter
+
+Prometheus periodically scrapes:
+
+* Application `/metrics`
+* Application EC2 Node Exporter
+* Prometheus EC2 Node Exporter
+* Grafana EC2 Node Exporter
+* Alertmanager EC2 Node Exporter
+
+Prometheus stores the collected time-series data and evaluates alert rules.
+
+```text
+Application EC2 ───────┐
+Prometheus EC2 ────────┤
+Grafana EC2 ───────────┼──► Prometheus
+Alertmanager EC2 ──────┘
+```
+
+---
+
+## Grafana EC2
+
+Grafana runs on its own EC2 instance.
+
+Its primary responsibility is visualization.
+
+```text
+Grafana
+   │
+   │ PromQL
+   ▼
+Prometheus
+   │
+   ▼
+Time-series data
+```
+
+Grafana does not collect metrics itself. It queries Prometheus as its data source.
+
+The Grafana server should remain private and can be accessed by operators through AWS Systems Manager port forwarding.
+
+---
+
+## Alertmanager EC2
+
+Alertmanager runs independently on its own EC2 instance.
+
+Prometheus sends firing and resolved alerts to Alertmanager.
+
+```text
+Prometheus
+    │
+    │ Alerts
+    ▼
+Alertmanager
+    │
+    ▼
+Configured notification receivers
+```
+
+Alertmanager is responsible for:
+
+* Grouping alerts
+* Routing alerts
+* Deduplicating notifications
+* Handling alert recovery
+* Sending notifications to configured receivers
+
+---
+
+## Node Exporter
+
+Node Exporter runs on **every EC2 instance that needs host-level monitoring**.
+
+Therefore, each server exposes:
+
+```text
+:9100/metrics
+```
+
+Prometheus is responsible for scraping these endpoints.
+
+Node Exporter provides infrastructure metrics such as:
+
+* CPU utilization
+* Memory usage
+* Disk usage
+* Filesystem statistics
+* Network statistics
+* System load
+
+This allows the monitoring system to observe both the application workload and the monitoring infrastructure itself.
+
+---
+
+## Overall Monitoring Flow
+
+```text
+                    ┌─────────────────────┐
+                    │   Application EC2   │
+                    │                     │
+                    │ Nginx               │
+                    │ NestJS              │
+                    │ PostgreSQL           │
+                    │ Node Exporter        │
+                    └──────────┬──────────┘
+                               │
+                     /metrics + :9100
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │   Prometheus EC2    │
+                    │                     │
+                    │ Prometheus          │
+                    │ Node Exporter       │
+                    └──────────┬──────────┘
+                               │
+                    ┌──────────┴──────────┐
+                    │                     │
+                  PromQL                Alerts
+                    │                     │
+                    ▼                     ▼
+          ┌──────────────────┐   ┌────────────────────┐
+          │  Grafana EC2     │   │ Alertmanager EC2   │
+          │                  │   │                    │
+          │ Grafana          │   │ Alertmanager       │
+          │ Node Exporter    │   │ Node Exporter      │
+          └──────────────────┘   └────────────────────┘
+```
+
+This separation keeps **application serving, metrics collection, visualization, and alert management as independent infrastructure components** while allowing Prometheus to provide a central source of monitoring data.
+
+
 
 # Application Architecture
 

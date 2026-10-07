@@ -22,8 +22,11 @@ variable "instance_type" {
   type = string
 }
 
+variable "my_ip" {
+  type = string
+}
+
 variable "amiID" {
   type = map(string)
 }
-
 

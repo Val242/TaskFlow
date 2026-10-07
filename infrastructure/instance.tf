@@ -1,9 +1,10 @@
 resource "aws_instance" "web" {
-  ami                    = data.aws_ami.amiID.id
-  instance_type          = var.instance_type
-  key_name               = var.keypair
-  vpc_security_group_ids = [aws_security_group.web-sg.id]
-  availability_zone      = var.zone1
+  ami                         = data.aws_ami.amiID.id
+  instance_type               = var.instance_type
+  key_name                    = var.keypair
+  vpc_security_group_ids      = [aws_security_group.web-sg.id]
+  availability_zone           = var.zone1
+  associate_public_ip_address = true
 
   tags = {
     Name    = "Infra-web"
@@ -18,11 +19,12 @@ resource "aws_ec2_instance_state" "web-state" {
 
 
 resource "aws_instance" "prometheus" {
-  ami                    = data.aws_ami.amiID.id
-  instance_type          = var.instance_type
-  key_name               = var.keypair
-  vpc_security_group_ids = [aws_security_group.prometheus-sg.id]
-  availability_zone      = var.zone1
+  ami                         = data.aws_ami.amiID.id
+  instance_type               = var.instance_type
+  key_name                    = var.keypair
+  vpc_security_group_ids      = [aws_security_group.prometheus-sg.id]
+  availability_zone           = var.zone1
+  associate_public_ip_address = true
 
   tags = {
     Name    = "Infra-prometheus"
@@ -37,11 +39,12 @@ resource "aws_ec2_instance_state" "prometheus-state" {
 
 
 resource "aws_instance" "grafana" {
-  ami                    = data.aws_ami.amiID.id
-  instance_type          = var.instance_type
-  key_name               = var.keypair
-  vpc_security_group_ids = [aws_security_group.grafana-sg.id]
-  availability_zone      = var.zone1
+  ami                         = data.aws_ami.amiID.id
+  instance_type               = var.instance_type
+  key_name                    = var.keypair
+  vpc_security_group_ids      = [aws_security_group.grafana-sg.id]
+  availability_zone           = var.zone1
+  associate_public_ip_address = true
 
   tags = {
     Name    = "Infra-grafana"

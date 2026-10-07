@@ -10,9 +10,9 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - "taskflow-api/**"
-      - ".github/workflows/taskflow-api.yml"
+    # paths:
+    #   - "taskflow-api/**"
+    #   - ".github/workflows/taskflow-api.yml"
 
 permissions:
   contents: read

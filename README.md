@@ -2,68 +2,67 @@
 
 A DevOps-focused platform for provisioning temporary AWS environments, deploying a backend application, and providing automated monitoring, alerting, and environment lifecycle management.
 
-The project is designed to demonstrate how a software application can move from source code to a repeatable AWS environment through Infrastructure as Code, CI/CD, Linux service management, observability, and automated infrastructure lifecycle management.
+The project demonstrates how a backend application can be taken from source code to a repeatable AWS environment using Infrastructure as Code, CI/CD, Linux service management, observability, and automated infrastructure lifecycle management.
+
+The backend application is intentionally simple. The primary focus of the project is the infrastructure and operational engineering surrounding the application.
 
 ---
 
-## Overview
+# Overview
 
 The platform provides a self-service workflow for creating temporary application environments on AWS.
 
-An environment consists of an application EC2 instance running:
+Each application environment consists of an EC2 instance running:
 
-* A NestJS backend
-* PostgreSQL
 * Nginx
+* NestJS
+* PostgreSQL
 * systemd
 * Node Exporter
 
-A separate monitoring EC2 instance provides shared observability through:
+Monitoring is separated from the application environment.
 
-* Prometheus
-* Grafana
-* Alertmanager
-* Node Exporter
+A dedicated Prometheus EC2 instance is responsible for collecting and evaluating metrics, while a separate Grafana EC2 instance provides visualization.
 
-Infrastructure is provisioned using Terraform, while GitHub Actions automates application checks, deployment, environment creation, destruction, and cleanup.
+Prometheus also communicates with Alertmanager for alert routing.
 
-AWS Systems Manager is used for deployment and administrative access without requiring publicly exposed SSH access.
-
-The project intentionally does not use Docker or container orchestration. Applications run directly on Linux to provide hands-on experience with EC2, systemd, networking, service management, deployment automation, and monitoring.
+The architecture intentionally does not use Docker or container orchestration. Applications run directly on Linux to provide hands-on experience with EC2, networking, Linux services, deployment automation, monitoring, and infrastructure lifecycle management.
 
 ---
 
 # Project Goals
 
-The primary goals are to demonstrate:
+The project is designed to demonstrate:
 
 * Infrastructure as Code with Terraform
 * AWS networking and security
-* Linux server administration
-* Backend deployment on EC2
+* EC2 administration
+* Linux service management
 * PostgreSQL administration
+* Backend deployment
 * CI/CD with GitHub Actions
 * AWS IAM and GitHub OIDC
 * AWS Systems Manager
+* Nginx reverse proxy configuration
 * systemd service management
-* Reverse proxy configuration with Nginx
-* Application and infrastructure monitoring
-* Prometheus metrics
-* Grafana dashboards
+* Prometheus monitoring
+* Grafana visualization
 * Alertmanager alerting
+* Application observability
+* Infrastructure monitoring
 * Temporary environment provisioning
 * Environment isolation
 * Automated environment expiration and cleanup
 
-The backend application is intentionally simple. The main focus of the project is the **engineering infrastructure around the application**.
+The goal is to build a complete operational workflow around a backend service rather than simply deploying a CRUD application.
 
 ---
 
 # Architecture
 
-The platform uses separate EC2 instances for the application and each major monitoring component.
+The platform separates the application workload from the monitoring infrastructure.
 
-The application environment runs the backend and PostgreSQL together, while Prometheus, Grafana, and Alertmanager are deployed independently. This separation isolates application workloads from monitoring workloads and allows each monitoring component to be managed independently.
+Each application environment runs on its own EC2 instance. Prometheus and Grafana run on dedicated EC2 instances.
 
 ```mermaid
 flowchart TD
@@ -73,26 +72,20 @@ flowchart TD
     subgraph AWS["AWS"]
 
         subgraph APP["Application EC2"]
-            NGINX["Nginx"]
-            API["NestJS API"]
-            DB["PostgreSQL"]
+            NGINX["Nginx<br/>HTTPS :443"]
+            API["NestJS API<br/>:3000"]
+            DB["PostgreSQL<br/>:5432"]
             SYSTEMD["systemd"]
-            NODE_APP["Node Exporter"]
+            NODE["Node Exporter<br/>:9100"]
         end
 
         subgraph PROM["Prometheus EC2"]
-            PROMETHEUS["Prometheus"]
-            NODE_PROM["Node Exporter"]
+            PROMETHEUS["Prometheus<br/>:9090"]
+            ALERTMANAGER["Alertmanager<br/>:9093"]
         end
 
         subgraph GRAFANA["Grafana EC2"]
-            GRAFANA_APP["Grafana"]
-            NODE_GRAFANA["Node Exporter"]
-        end
-
-        subgraph ALERT["Alertmanager EC2"]
-            ALERTMANAGER["Alertmanager"]
-            NODE_ALERT["Node Exporter"]
+            GRAFANA_APP["Grafana<br/>:3000"]
         end
     end
 
@@ -100,11 +93,8 @@ flowchart TD
     NGINX -->|"HTTP"| API
     API -->|"Prisma / localhost"| DB
 
-    PROMETHEUS -->|"Scrape /metrics"| API
-    PROMETHEUS -->|"Scrape :9100"| NODE_APP
-    PROMETHEUS -->|"Scrape :9100"| NODE_PROM
-    PROMETHEUS -->|"Scrape :9100"| NODE_GRAFANA
-    PROMETHEUS -->|"Scrape :9100"| NODE_ALERT
+    PROMETHEUS -->|"Application metrics :3000/metrics"| API
+    PROMETHEUS -->|"System metrics :9100"| NODE
 
     GRAFANA_APP -->|"PromQL"| PROMETHEUS
     PROMETHEUS -->|"Alerts"| ALERTMANAGER
@@ -114,71 +104,112 @@ flowchart TD
 
 ## Application EC2
 
-The application EC2 instance hosts the actual workload:
+The application EC2 instance hosts the application workload:
 
-* Nginx
-* NestJS
-* PostgreSQL
-* systemd
-* Node Exporter
+```text
+Application EC2
+│
+├── Nginx
+├── NestJS
+├── PostgreSQL
+├── systemd
+└── Node Exporter
+```
 
-The request path is:
+The public request path is:
 
 ```text
 Client
    │
-   │ HTTPS
+   │ HTTPS :443
    ▼
-Nginx
+ Nginx
    │
-   │ HTTP
+   │ HTTP :3000
    ▼
-NestJS
+ NestJS
    │
    │ Prisma
    ▼
 PostgreSQL
 ```
 
-PostgreSQL runs locally on the same instance as NestJS. It is not publicly exposed.
+PostgreSQL runs on the same EC2 instance as NestJS.
 
-Node Exporter exposes host-level metrics for Prometheus.
+Node Exporter runs on the application EC2 and exposes host-level system metrics on port `9100`.
 
 ---
 
 ## Prometheus EC2
 
-The Prometheus EC2 instance is responsible for metrics collection and alert evaluation.
+Prometheus runs on a dedicated EC2 instance.
 
-It runs:
+Its responsibilities are:
 
-* Prometheus
-* Node Exporter
+* Scrape application metrics
+* Scrape application host metrics
+* Store time-series data
+* Evaluate alert rules
+* Send alerts to Alertmanager
 
-Prometheus periodically scrapes:
+Prometheus obtains two different categories of metrics from the application server.
 
-* Application `/metrics`
-* Application EC2 Node Exporter
-* Prometheus EC2 Node Exporter
-* Grafana EC2 Node Exporter
-* Alertmanager EC2 Node Exporter
+### Application metrics
 
-Prometheus stores the collected time-series data and evaluates alert rules.
+Prometheus scrapes:
 
 ```text
-Application EC2 ───────┐
-Prometheus EC2 ────────┤
-Grafana EC2 ───────────┼──► Prometheus
-Alertmanager EC2 ──────┘
+http://APPLICATION_PRIVATE_IP:3000/metrics
 ```
+
+These metrics describe the NestJS application, such as:
+
+* HTTP request count
+* HTTP request duration
+* HTTP error rate
+* Node.js runtime metrics
+* Process memory
+
+### System metrics
+
+Prometheus scrapes:
+
+```text
+http://APPLICATION_PRIVATE_IP:9100/metrics
+```
+
+These metrics are provided by Node Exporter and describe the application server itself, such as:
+
+* CPU utilization
+* Memory usage
+* Disk usage
+* Filesystem usage
+* Network statistics
+* System load
+
+The important distinction is:
+
+```text
+Application EC2
+│
+├── :3000/metrics
+│       └── Application metrics
+│
+└── :9100/metrics
+        └── System metrics
+```
+
+Prometheus is responsible for collecting both.
 
 ---
 
 ## Grafana EC2
 
-Grafana runs on its own EC2 instance.
+Grafana runs on a separate EC2 instance.
 
-Its primary responsibility is visualization.
+Grafana does not scrape application metrics directly.
+
+Instead:
 
 ```text
 Grafana
@@ -191,130 +222,105 @@ Prometheus
 Time-series data
 ```
 
-Grafana does not collect metrics itself. It queries Prometheus as its data source.
+Grafana provides dashboards for:
 
-The Grafana server should remain private and can be accessed by operators through AWS Systems Manager port forwarding.
+* Request rate
+* HTTP 5xx percentage
+* P95 latency
+* Application availability
+* CPU utilization
+* Memory utilization
+* Disk utilization
+* Node.js process memory
+
+Grafana should remain private and can be accessed by an operator through AWS Systems Manager port forwarding.
 
 ---
 
-## Alertmanager EC2
+## Alertmanager
 
-Alertmanager runs independently on its own EC2 instance.
+Alertmanager runs alongside Prometheus on the Prometheus EC2 instance.
 
-Prometheus sends firing and resolved alerts to Alertmanager.
+The alerting flow is:
 
 ```text
 Prometheus
     │
-    │ Alerts
+    │ Alert
     ▼
 Alertmanager
     │
     ▼
-Configured notification receivers
+Configured notification receiver
 ```
 
 Alertmanager is responsible for:
 
 * Grouping alerts
-* Routing alerts
-* Deduplicating notifications
-* Handling alert recovery
-* Sending notifications to configured receivers
+* Deduplicating alerts
+* Routing notifications
+* Handling firing alerts
+* Handling resolved alerts
+
+Examples of alerts include:
+
+* Application unavailable
+* Elevated HTTP 5xx rate
+* High CPU utilization
+* High memory utilization
+* Low disk space
+* Prometheus target unavailable
 
 ---
 
-## Node Exporter
+## Monitoring Flow
 
-Node Exporter runs on **every EC2 instance that needs host-level monitoring**.
-
-Therefore, each server exposes:
+The complete monitoring flow is:
 
 ```text
-:9100/metrics
-```
-
-Prometheus is responsible for scraping these endpoints.
-
-Node Exporter provides infrastructure metrics such as:
-
-* CPU utilization
-* Memory usage
-* Disk usage
-* Filesystem statistics
-* Network statistics
-* System load
-
-This allows the monitoring system to observe both the application workload and the monitoring infrastructure itself.
-
----
-
-## Overall Monitoring Flow
-
-```text
-                    ┌─────────────────────┐
-                    │   Application EC2   │
-                    │                     │
-                    │ Nginx               │
-                    │ NestJS              │
-                    │ PostgreSQL           │
-                    │ Node Exporter        │
-                    └──────────┬──────────┘
+                         Application EC2
+                    ┌──────────────────────┐
+                    │                      │
+                    │       NestJS         │
+                    │        :3000         │
+                    │          │           │
+                    │          │ /metrics  │
+                    │          ▼           │
+                    │  Application Metrics │
+                    │                      │
+                    │  Node Exporter :9100 │
+                    │          │           │
+                    │          ▼           │
+                    │    System Metrics    │
+                    └──────────┬───────────┘
                                │
-                     /metrics + :9100
+                     Private Network
                                │
                                ▼
-                    ┌─────────────────────┐
-                    │   Prometheus EC2    │
-                    │                     │
-                    │ Prometheus          │
-                    │ Node Exporter       │
-                    └──────────┬──────────┘
-                               │
-                    ┌──────────┴──────────┐
-                    │                     │
-                  PromQL                Alerts
-                    │                     │
-                    ▼                     ▼
-          ┌──────────────────┐   ┌────────────────────┐
-          │  Grafana EC2     │   │ Alertmanager EC2   │
-          │                  │   │                    │
-          │ Grafana          │   │ Alertmanager       │
-          │ Node Exporter    │   │ Node Exporter      │
-          └──────────────────┘   └────────────────────┘
+                    ┌─────────────────┐
+                    │ Prometheus EC2  │
+                    │                 │
+                    │   Prometheus    │
+                    │   Alertmanager  │
+                    └────────┬────────┘
+                             │
+                           PromQL
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │   Grafana EC2   │
+                    │                 │
+                    │     Grafana     │
+                    └─────────────────┘
 ```
 
-This separation keeps **application serving, metrics collection, visualization, and alert management as independent infrastructure components** while allowing Prometheus to provide a central source of monitoring data.
+Prometheus is the central metrics collection and alert evaluation component.
 
+Grafana is the visualization layer.
 
+Alertmanager is the alert routing layer.
 
-# Application Architecture
-
-The backend is a TypeScript/NestJS task management API.
-
-The application provides basic CRUD functionality for tasks while exposing health and monitoring endpoints required by the infrastructure.
-
-```text
-Client
-  │
-  │ HTTPS
-  ▼
-Nginx
-  │
-  │ HTTP
-  ▼
-NestJS
-  │
-  │ Prisma
-  ▼
-PostgreSQL
-```
-
-The application runs directly on the application EC2 instance.
-
-PostgreSQL is intentionally hosted on the same EC2 instance to keep the project focused on infrastructure, deployment, and observability rather than managed database infrastructure.
-
-This architecture is suitable for the scope of the project but is not intended to represent a highly available production database architecture.
+Node Exporter provides system-level metrics from the application server.
 
 ---
 
@@ -333,6 +339,8 @@ This architecture is suitable for the scope of the project but is not intended t
 * AWS
 * EC2
 * VPC
+* Subnets
+* Route Tables
 * Security Groups
 * IAM
 * Terraform
@@ -411,13 +419,13 @@ DELETE /tasks/:id
 
 The API shall validate incoming requests.
 
-Invalid requests should return:
+Invalid requests return:
 
 ```text
 400 Bad Request
 ```
 
-Requests for nonexistent tasks should return:
+Requests for nonexistent tasks return:
 
 ```text
 404 Not Found
@@ -437,7 +445,7 @@ DONE
 
 Tasks shall be persisted in PostgreSQL using Prisma.
 
-Application restarts must not result in data loss.
+Application restarts must not result in task data loss.
 
 Tasks shall contain creation and update timestamps.
 
@@ -471,7 +479,7 @@ GET /health/ready
 
 Confirms that the application is capable of serving requests, including verifying database connectivity.
 
-A failed readiness check should return:
+A failed readiness check returns:
 
 ```text
 503 Service Unavailable
@@ -489,14 +497,16 @@ GET /metrics
 
 Metrics should include:
 
-* Request count
-* Request duration
-* HTTP error rates
+* HTTP request count
+* HTTP request duration
+* HTTP error rate
 * Node.js runtime metrics
-* Process memory usage
-* Other relevant application metrics
+* Process memory
+* Other useful application metrics
 
-The metrics endpoint must not be publicly accessible.
+The endpoint must not be publicly accessible.
+
+Prometheus accesses it through the application's private network interface.
 
 ---
 
@@ -509,11 +519,10 @@ Initial dashboards should include:
 * Request rate
 * HTTP 5xx percentage
 * P95 latency
-* Prometheus scrape availability
+* Application availability
 * CPU utilization
 * Memory utilization
 * Disk utilization
-* Network utilization
 * Node.js process memory
 
 ---
@@ -525,13 +534,13 @@ Prometheus shall evaluate alert rules for important operational conditions.
 Examples include:
 
 * Application unavailable
-* Node Exporter unavailable
+* Prometheus scrape failure
 * Elevated HTTP 5xx rate
 * High CPU usage
 * High memory usage
 * Low disk space
 
-Alertmanager shall route and manage these alerts.
+Alertmanager shall receive and route these alerts.
 
 Alerts should support both firing and recovery states.
 
@@ -604,8 +613,8 @@ The workflow shall:
 2. Provision the environment using Terraform.
 3. Configure the application server.
 4. Deploy the backend.
-5. Configure monitoring.
-6. Return the environment information.
+5. Register the environment for monitoring.
+6. Return environment information.
 
 ---
 
@@ -646,13 +655,13 @@ The cleanup process should:
 3. Destroy the environment.
 4. Remove stale monitoring targets.
 
-Cleanup should be idempotent and safe to rerun.
+Cleanup should be safe to rerun.
 
 ---
 
 ## FR18 — Monitoring Target Lifecycle
 
-Monitoring targets shall be dynamically associated with application environments.
+Application environments shall be registered with Prometheus when they are created.
 
 When an environment is created:
 
@@ -664,6 +673,10 @@ Application EC2 Created
         │
         ▼
 Prometheus discovers target
+        │
+        ├── :3000/metrics
+        │
+        └── :9100/metrics
 ```
 
 When an environment is destroyed:
@@ -672,17 +685,17 @@ When an environment is destroyed:
 Environment Destroyed
         │
         ▼
-Target disappears
+Application EC2 Removed
         │
         ▼
-Prometheus stops scraping it
+Prometheus removes target
 ```
 
 ---
 
 # Database Architecture
 
-PostgreSQL runs on the same EC2 instance as the NestJS application.
+PostgreSQL runs directly on the same EC2 instance as the NestJS application.
 
 ```text
 Application EC2
@@ -694,9 +707,9 @@ Application EC2
 └── Node Exporter
 ```
 
-The application communicates with PostgreSQL locally.
+NestJS communicates with PostgreSQL locally.
 
-Example connection:
+Example connection string:
 
 ```dotenv
 DATABASE_URL="postgresql://app_user:password@localhost:5432/taskflow"
@@ -712,24 +725,24 @@ Each isolated application environment has its own PostgreSQL instance and databa
 
 # Networking
 
-The AWS infrastructure shall use a VPC with appropriate public and private networking.
+The AWS infrastructure uses a VPC with appropriate public and private networking.
 
 The application EC2 requires public HTTPS access through Nginx.
 
-Monitoring services should remain private.
+Monitoring infrastructure should remain private.
 
-Expected network access:
+Expected access:
 
-| Resource      | Port | Access                        |
-| ------------- | ---: | ----------------------------- |
-| Nginx         |  443 | Public HTTPS                  |
-| Nginx         |   80 | HTTP redirect, if enabled     |
-| NestJS        | 3000 | Private                       |
-| PostgreSQL    | 5432 | Local application access      |
-| Node Exporter | 9100 | Monitoring EC2 only           |
-| Prometheus    | 9090 | Private                       |
-| Grafana       | 3000 | Private / SSM port forwarding |
-| Alertmanager  | 9093 | Private                       |
+| Resource      | Port | Source                                      |
+| ------------- | ---: | ------------------------------------------- |
+| Nginx         |  443 | Public HTTPS clients                        |
+| Nginx         |   80 | Public clients, if HTTP redirect is enabled |
+| NestJS        | 3000 | Prometheus security group                   |
+| Node Exporter | 9100 | Prometheus security group                   |
+| PostgreSQL    | 5432 | Local application host                      |
+| Prometheus    | 9090 | Private / operator access                   |
+| Alertmanager  | 9093 | Private                                     |
+| Grafana       | 3000 | Private / SSM port forwarding               |
 
 SSH access should not be required for normal deployment.
 
@@ -747,7 +760,7 @@ GitHub Actions should authenticate to AWS using GitHub OIDC rather than long-liv
 
 ## Security Groups
 
-Security groups should restrict access between components.
+Security groups should restrict communication between components.
 
 The following services should not be publicly exposed:
 
@@ -775,7 +788,7 @@ Systems Manager will be used for:
 * Operational tasks
 * Private service access through port forwarding
 
-For example, Grafana can remain bound to a private interface while an operator accesses it through an SSM tunnel.
+Grafana can remain private while operators access it through an SSM tunnel.
 
 ---
 
@@ -785,29 +798,20 @@ Terraform manages the AWS infrastructure.
 
 The infrastructure is organized into reusable modules and environment-specific configurations.
 
-```text
-infrastructure/
-├── bootstrap/
-├── modules/
-│   ├── networking/
-│   ├── application/
-│   └── monitoring/
-├── environments/
-└── shared/
-```
-
 Terraform is responsible for infrastructure such as:
 
 * VPC
 * Subnets
-* Internet connectivity
 * Route tables
+* Internet connectivity
 * Security groups
 * IAM
-* EC2
-* Shared monitoring infrastructure
+* Application EC2
+* Prometheus EC2
+* Grafana EC2
+* Shared infrastructure
 
-Application-level configuration such as PostgreSQL installation, Nginx configuration, and systemd services is handled separately through configuration scripts and deployment automation.
+Application-level configuration such as PostgreSQL installation, Nginx configuration, Node Exporter, systemd services, Prometheus, Grafana, and Alertmanager is handled through configuration scripts and deployment automation.
 
 ---
 
@@ -834,13 +838,13 @@ GitHub Actions
    └── Dependency Scan
            │
            ▼
-       AWS OIDC
+       GitHub OIDC
            │
            ▼
         AWS IAM
            │
            ▼
-      Systems Manager
+    Systems Manager
            │
            ▼
     Application EC2
@@ -881,7 +885,7 @@ Application EC2
     └── Run smoke tests
 ```
 
-Previous releases should be retained so that application rollback is possible.
+Previous releases should be retained to support application rollback.
 
 Database rollback must be handled separately from application rollback because schema changes can have compatibility implications.
 
@@ -889,42 +893,60 @@ Database rollback must be handled separately from application rollback because s
 
 # Observability Architecture
 
-The monitoring architecture separates metrics collection, visualization, and alerting.
+The monitoring system separates metrics collection, visualization, and alerting.
 
 ```text
-                 ┌───────────────┐
-                 │ Application   │
-                 │    EC2        │
-                 └───────┬───────┘
-                         │
-              ┌──────────┴──────────┐
-              │                     │
-         /metrics                :9100
-              │                     │
-              └──────────┬──────────┘
-                         │
-                         ▼
-                  ┌─────────────┐
-                  │ Prometheus  │
-                  └──────┬──────┘
-                         │
-               ┌─────────┴─────────┐
-               │                   │
-               ▼                   ▼
-          ┌─────────┐        ┌─────────────┐
-          │ Grafana │        │ Alertmanager│
-          └─────────┘        └─────────────┘
+                    Application EC2
+              ┌────────────────────────┐
+              │                        │
+              │       NestJS           │
+              │        :3000           │
+              │          │             │
+              │          │ /metrics    │
+              │          ▼             │
+              │  Application Metrics   │
+              │                        │
+              │  Node Exporter :9100   │
+              │          │             │
+              │          ▼             │
+              │    System Metrics      │
+              └────────────┬───────────┘
+                           │
+                    Private Network
+                           │
+                           ▼
+                  ┌─────────────────┐
+                  │ Prometheus EC2  │
+                  │                 │
+                  │   Prometheus    │
+                  │   Alertmanager  │
+                  └────────┬────────┘
+                           │
+                         PromQL
+                           │
+                           ▼
+                  ┌─────────────────┐
+                  │   Grafana EC2   │
+                  │                 │
+                  │     Grafana     │
+                  └─────────────────┘
 ```
 
-Prometheus collects and stores metrics.
+There is one Node Exporter in the application monitoring path: **the Node Exporter running on the application EC2**.
 
-Grafana visualizes metrics.
+Prometheus scrapes:
 
-Alertmanager handles alert routing.
+```text
+Application EC2 :3000/metrics
+        │
+        └── Application metrics
 
-Node Exporter exposes operating-system metrics.
+Application EC2 :9100/metrics
+        │
+        └── System metrics
+```
 
-NestJS exposes application-level metrics.
+Prometheus then makes those metrics available to Grafana through PromQL.
 
 ---
 
@@ -942,7 +964,7 @@ Nginx maintains its own access and error logs.
 
 Prometheus and Grafana are responsible for metrics and visualization, not application log aggregation.
 
-A centralized log aggregation system is outside the initial project scope.
+Centralized log aggregation is outside the initial project scope.
 
 ---
 
@@ -968,162 +990,86 @@ Gitleaks is used to detect accidentally committed secrets.
 
 ---
 
-# Repository Structure
+# Self-Service Environments
+
+The long-term goal is to allow an operator to create temporary environments through GitHub Actions.
+
+The workflow will accept inputs such as:
 
 ```text
-devops-self-service-platform/
-├── README.md
-├── .gitignore
-├── .env.example
-│
-├── app/
-│   ├── src/
-│   │   ├── main.ts
-│   │   ├── app.module.ts
-│   │   ├── tasks/
-│   │   │   ├── tasks.module.ts
-│   │   │   ├── tasks.controller.ts
-│   │   │   ├── tasks.service.ts
-│   │   │   └── dto/
-│   │   │       ├── create-task.dto.ts
-│   │   │       └── update-task.dto.ts
-│   │   ├── prisma/
-│   │   │   ├── prisma.module.ts
-│   │   │   └── prisma.service.ts
-│   │   ├── health/
-│   │   │   ├── health.module.ts
-│   │   │   └── health.controller.ts
-│   │   └── metrics/
-│   │       ├── metrics.module.ts
-│   │       ├── metrics.controller.ts
-│   │       └── metrics.interceptor.ts
-│   ├── prisma/
-│   │   ├── schema.prisma
-│   │   └── migrations/
-│   ├── test/
-│   │   └── tasks.e2e-spec.ts
-│   ├── package.json
-│   ├── package-lock.json
-│   ├── nest-cli.json
-│   └── tsconfig.json
-│
-├── infrastructure/
-│   ├── bootstrap/
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   └── outputs.tf
-│   ├── modules/
-│   │   ├── networking/
-│   │   ├── application/
-│   │   └── monitoring/
-│   ├── environments/
-│   │   ├── main.tf
-│   │   ├── providers.tf
-│   │   ├── versions.tf
-│   │   ├── variables.tf
-│   │   ├── outputs.tf
-│   │   ├── backend.tf
-│   │   └── terraform.tfvars.example
-│   └── shared/
-│       ├── main.tf
-│       ├── providers.tf
-│       ├── versions.tf
-│       ├── variables.tf
-│       ├── outputs.tf
-│       └── backend.tf
-│
-├── configuration/
-│   ├── nginx/
-│   │   └── api.conf
-│   ├── systemd/
-│   │   ├── nestjs-api.service
-│   │   ├── node-exporter.service
-│   │   ├── prometheus.service
-│   │   └── alertmanager.service
-│   ├── prometheus/
-│   │   ├── prometheus.yml
-│   │   └── rules/
-│   │       ├── application-alerts.yml
-│   │       └── host-alerts.yml
-│   ├── grafana/
-│   │   ├── dashboards/
-│   │   │   ├── application.json
-│   │   │   └── host.json
-│   │   └── provisioning/
-│   │       ├── datasources/
-│   │       │   └── prometheus.yml
-│   │       └── dashboards/
-│   │           └── dashboards.yml
-│   └── alertmanager/
-│       └── alertmanager.yml
-│
-├── scripts/
-│   ├── setup-application.sh
-│   ├── setup-monitoring.sh
-│   ├── deploy.sh
-│   ├── load-secrets.sh
-│   ├── smoke-test.sh
-│   ├── rollback.sh
-│   └── cleanup-expired.sh
-│
-├── .github/
-│   └── workflows/
-│       ├── ci.yml
-│       ├── provision.yml
-│       ├── deploy.yml
-│       ├── destroy.yml
-│       └── cleanup-expired.yml
-│
-└── docs/
-    ├── architecture.md
-    ├── local-development.md
-    ├── deployment.md
-    └── runbooks/
-        ├── application-down.md
-        ├── database-connection.md
-        └── rollback.md
+Environment name
+Environment lifetime
 ```
+
+The workflow will then:
+
+```text
+GitHub Actions
+      │
+      ▼
+Validate inputs
+      │
+      ▼
+Terraform
+      │
+      ▼
+Create isolated application environment
+      │
+      ▼
+Deploy NestJS
+      │
+      ▼
+Register monitoring targets
+      │
+      ▼
+Return environment URL
+```
+
+Each environment receives its own application EC2 instance and PostgreSQL database.
+
+Prometheus monitors the application through:
+
+```text
+Application EC2 :3000/metrics
+Application EC2 :9100/metrics
+```
+
+Shared Prometheus, Grafana, and Alertmanager infrastructure remains independent of the temporary application environment.
 
 ---
 
-# Environment Lifecycle
+# Environment Destruction
 
-The complete environment lifecycle is intended to be:
+Two destruction mechanisms are planned.
+
+## Manual Destruction
+
+An operator can select an environment through GitHub Actions and destroy it.
+
+The workflow must destroy only the selected application environment.
+
+Shared Prometheus, Grafana, and Alertmanager infrastructure must remain intact.
+
+## Automatic Expiry
+
+A scheduled GitHub Actions workflow periodically searches for expired environments.
+
+For each expired environment:
 
 ```text
-             ┌───────────────┐
-             │ Create Request│
-             └───────┬───────┘
-                     │
-                     ▼
-              Terraform Apply
-                     │
-                     ▼
-             AWS Environment
-                     │
-                     ▼
-                Deployment
-                     │
-                     ▼
-               Verification
-                     │
-                     ▼
-                Monitoring
-                     │
-                     ▼
-             Environment Active
-                     │
-                     ▼
-                Expiration
-                     │
-                     ▼
-              Terraform Destroy
-                     │
-                     ▼
-              Environment Removed
+Find expired environment
+        │
+        ▼
+Identify Terraform state
+        │
+        ▼
+Destroy application environment
+        │
+        ▼
+Remove monitoring target
 ```
 
-Shared monitoring infrastructure remains available throughout the lifecycle.
+The cleanup process should be safe to rerun.
 
 ---
 
@@ -1131,9 +1077,7 @@ Shared monitoring infrastructure remains available throughout the lifecycle.
 
 The platform should support basic operational recovery scenarios.
 
-Examples include:
-
-### Application process failure
+## Application Process Failure
 
 ```text
 NestJS crashes
@@ -1145,13 +1089,13 @@ systemd detects failure
 systemd restarts application
 ```
 
-### Application unavailable
+## Application Unavailability
 
 ```text
 Prometheus
      │
      ▼
-Target unavailable
+Application target unavailable
      │
      ▼
 Alert rule fires
@@ -1160,7 +1104,7 @@ Alert rule fires
 Alertmanager
 ```
 
-### Database unavailable
+## Database Unavailability
 
 ```text
 NestJS
@@ -1175,7 +1119,7 @@ Readiness check fails
 503 Service Unavailable
 ```
 
-### Expired environment
+## Expired Environment
 
 ```text
 Scheduled cleanup
@@ -1207,96 +1151,16 @@ The initial version intentionally excludes:
 * Frontend development
 * Multi-region deployment
 * High availability
-* Auto Scaling Groups for the application
+* Application Auto Scaling
 * Blue/green deployment
 * Canary deployment
 * Centralized log aggregation
 * Distributed tracing
-* Complex database replication
+* Database replication
 
 These technologies may be appropriate for larger production systems, but they are outside the scope of this project.
 
-The goal is to build a complete and understandable DevOps workflow without introducing unnecessary infrastructure complexity.
-
----
-
-# Implementation Roadmap
-
-## Phase 1 — Backend
-
-* Create NestJS application
-* Implement task CRUD
-* Add DTO validation
-* Configure PostgreSQL
-* Configure Prisma
-* Create migrations
-* Add automated tests
-
-## Phase 2 — AWS Infrastructure
-
-* Create VPC
-* Configure subnets
-* Configure routing
-* Configure security groups
-* Create IAM roles
-* Provision application EC2
-* Provision monitoring EC2
-* Configure Systems Manager
-
-## Phase 3 — Application Deployment
-
-* Install Node.js
-* Install PostgreSQL
-* Configure database
-* Configure Nginx
-* Configure systemd
-* Package application
-* Deploy application
-* Execute Prisma migrations
-* Verify application health
-
-## Phase 4 — Observability
-
-* Add `/health/live`
-* Add `/health/ready`
-* Add `/metrics`
-* Install Node Exporter
-* Configure Prometheus
-* Configure Grafana
-* Create dashboards
-* Configure Alertmanager
-* Test alerts and recovery
-
-## Phase 5 — CI/CD
-
-* Configure GitHub Actions
-* Add linting
-* Add tests
-* Add build
-* Add Gitleaks
-* Add dependency scanning
-* Configure GitHub OIDC
-* Configure SSM deployment
-* Add smoke tests
-* Add rollback procedure
-
-## Phase 6 — Self-Service Environments
-
-* Add environment workflow inputs
-* Create isolated Terraform state
-* Provision temporary environments
-* Deploy application automatically
-* Configure monitoring targets
-* Add manual destruction workflow
-
-## Phase 7 — Lifecycle Automation
-
-* Add environment expiry
-* Add scheduled cleanup
-* Remove stale monitoring targets
-* Verify environment isolation
-* Test failure and recovery scenarios
-* Complete documentation
+The objective is to build a complete and understandable DevOps workflow without introducing unnecessary infrastructure complexity.
 
 ---
 
@@ -1304,18 +1168,18 @@ The goal is to build a complete and understandable DevOps workflow without intro
 
 The project is complete when the platform can:
 
-* Provision an AWS environment through Terraform.
+* Provision an AWS environment using Terraform.
 * Deploy the NestJS application directly to EC2.
 * Run PostgreSQL alongside the application.
 * Manage the application through systemd.
 * Serve the API through HTTPS using Nginx.
 * Persist task data using PostgreSQL and Prisma.
 * Expose application health endpoints.
-* Expose Prometheus application metrics.
-* Collect host metrics using Node Exporter.
-* Scrape application environments using Prometheus.
+* Expose application metrics on port `3000`.
+* Expose host metrics through Node Exporter on port `9100`.
+* Allow Prometheus to scrape both application and system metrics.
 * Visualize metrics through Grafana.
-* Detect operational failures through Prometheus alerts.
+* Evaluate alerts through Prometheus.
 * Route alerts through Alertmanager.
 * Run CI quality and security checks through GitHub Actions.
 * Authenticate GitHub Actions to AWS using OIDC.
@@ -1324,7 +1188,7 @@ The project is complete when the platform can:
 * Destroy environments manually.
 * Automatically remove expired environments.
 * Preserve shared monitoring infrastructure.
-* Update monitoring targets as environments are created and destroyed.
+* Update Prometheus targets as environments are created and destroyed.
 * Demonstrate application recovery after failure.
 * Document deployment, troubleshooting, rollback, and cleanup procedures.
 
@@ -1332,7 +1196,7 @@ The project is complete when the platform can:
 
 # Learning Outcomes
 
-This project is intended to provide practical experience with the full lifecycle of a backend service:
+This project is intended to provide practical experience with the complete lifecycle of a backend service:
 
 ```text
 Code
@@ -1362,16 +1226,15 @@ Alert
 Recover
  │
  ▼
-Scale the workflow
+Automate
  │
  ▼
 Destroy temporary infrastructure
 ```
 
-The backend application provides the workload, while the surrounding infrastructure demonstrates how software is provisioned, deployed, operated, monitored, and eventually removed in a cloud environment.
+The backend application provides the workload, while the surrounding infrastructure demonstrates how software can be provisioned, deployed, operated, monitored, recovered, and eventually removed through an automated cloud workflow.
 
 The final objective is a repeatable self-service platform where creating an environment is an automated engineering workflow rather than a sequence of manual server configuration steps.
-
 
 ## Reference documentation
 

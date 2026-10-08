@@ -4,7 +4,7 @@ resource "aws_instance" "web" {
   key_name                    = var.keypair
   vpc_security_group_ids      = [aws_security_group.web-sg.id]
   availability_zone           = var.zone1
-  associate_public_ip_address = true
+  associate_public_ip_address = false
 
   tags = {
     Name    = "Infra-web"

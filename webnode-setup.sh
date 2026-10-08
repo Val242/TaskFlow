@@ -287,7 +287,7 @@ WorkingDirectory=/opt/taskflow-api
 EnvironmentFile=/opt/taskflow-api/.env
 Environment=NODE_ENV=production
 
-ExecStart=/usr/bin/node /opt/taskflow-api/dist/main.js
+ExecStart=/usr/bin/node /opt/taskflow-api/dist/src/main.js
 
 Restart=always
 RestartSec=5

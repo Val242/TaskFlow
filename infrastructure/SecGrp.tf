@@ -131,6 +131,8 @@ resource "aws_security_group" "prometheus-sg" {
 
 }
 
+
+
 resource "aws_vpc_security_group_ingress_rule" "prometheus_ssh_from_my_ip" {
 
   security_group_id = aws_security_group.prometheus-sg.id
@@ -150,7 +152,7 @@ resource "aws_vpc_security_group_ingress_rule" "prometheus_web_ui_from_my_ip" {
 
   security_group_id = aws_security_group.prometheus-sg.id
 
-  cidr_ipv4 = "0.0.0.0/0"
+  cidr_ipv4 = var.my_ip
 
   from_port = 9090
 
@@ -160,7 +162,24 @@ resource "aws_vpc_security_group_ingress_rule" "prometheus_web_ui_from_my_ip" {
 
 }
 
+resource "aws_vpc_security_group_egress_rule" "prometheus_allow_all_outbound_ipv4" {
 
+  security_group_id = aws_security_group.prometheus-sg.id
+
+  cidr_ipv4   = "0.0.0.0/0"
+  ip_protocol = "-1"
+
+}
+
+resource "aws_vpc_security_group_egress_rule" "prometheus_allow_all_outbound_ipv6" {
+
+  security_group_id = aws_security_group.prometheus-sg.id
+
+  cidr_ipv6 = "::/0"
+
+  ip_protocol = "-1" # semantically equivalent to all ports
+
+}
 
 resource "aws_security_group" "grafana-sg" {
 
@@ -201,5 +220,24 @@ resource "aws_vpc_security_group_ingress_rule" "grafana_web_ui_public" {
   ip_protocol = "tcp"
 
   to_port = 3000
+
+}
+
+resource "aws_vpc_security_group_egress_rule" "grafana_allow_all_outbound_ipv4" {
+
+  security_group_id = aws_security_group.grafana-sg.id
+
+  cidr_ipv4   = "0.0.0.0/0"
+  ip_protocol = "-1"
+
+}
+
+resource "aws_vpc_security_group_egress_rule" "grafana_allow_all_outbound_ipv6" {
+
+  security_group_id = aws_security_group.grafana-sg.id
+
+  cidr_ipv6 = "::/0"
+
+  ip_protocol = "-1" # semantically equivalent to all ports
 
 }

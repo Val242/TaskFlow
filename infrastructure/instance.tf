@@ -14,7 +14,7 @@ resource "aws_instance" "web" {
 
 resource "aws_ec2_instance_state" "web-state" {
   instance_id = aws_instance.web.id
-  state       = "stopped"
+  state       = "running"
 }
 
 
@@ -34,7 +34,7 @@ resource "aws_instance" "prometheus" {
 
 resource "aws_ec2_instance_state" "prometheus-state" {
   instance_id = aws_instance.prometheus.id
-  state       = "stopped"
+  state       = "running"
 }
 
 
@@ -54,5 +54,5 @@ resource "aws_instance" "grafana" {
 
 resource "aws_ec2_instance_state" "grafana-state" {
   instance_id = aws_instance.grafana.id
-  state       = "stopped"
+  state       = "running"
 }

@@ -25,6 +25,34 @@ resource "aws_vpc_security_group_ingress_rule" "web_ssh_from_my_ip" {
 
 }
 
+resource "aws_vpc_security_group_ingress_rule" "web_ssh_from_prometheus" {
+
+  security_group_id = aws_security_group.web-sg.id
+
+  referenced_security_group_id = aws_security_group.prometheus-sg.id
+
+  from_port = 22
+
+  ip_protocol = "tcp"
+
+  to_port = 22
+
+}
+
+resource "aws_vpc_security_group_ingress_rule" "web_ssh_from_grafana" {
+
+  security_group_id = aws_security_group.web-sg.id
+
+  referenced_security_group_id = aws_security_group.grafana-sg.id
+
+  from_port = 22
+
+  ip_protocol = "tcp"
+
+  to_port = 22
+
+}
+
 resource "aws_vpc_security_group_ingress_rule" "web_http_from_my_ip" {
 
   security_group_id = aws_security_group.web-sg.id
@@ -147,6 +175,34 @@ resource "aws_vpc_security_group_ingress_rule" "prometheus_ssh_from_my_ip" {
 
 }
 
+resource "aws_vpc_security_group_ingress_rule" "prometheus_ssh_from_web" {
+
+  security_group_id = aws_security_group.prometheus-sg.id
+
+  referenced_security_group_id = aws_security_group.web-sg.id
+
+  from_port = 22
+
+  ip_protocol = "tcp"
+
+  to_port = 22
+
+}
+
+resource "aws_vpc_security_group_ingress_rule" "prometheus_ssh_from_grafana" {
+
+  security_group_id = aws_security_group.prometheus-sg.id
+
+  referenced_security_group_id = aws_security_group.grafana-sg.id
+
+  from_port = 22
+
+  ip_protocol = "tcp"
+
+  to_port = 22
+
+}
+
 
 resource "aws_vpc_security_group_ingress_rule" "prometheus_web_ui_from_my_ip" {
 
@@ -159,6 +215,20 @@ resource "aws_vpc_security_group_ingress_rule" "prometheus_web_ui_from_my_ip" {
   to_port = 9090
 
   ip_protocol = "tcp"
+
+}
+
+resource "aws_vpc_security_group_ingress_rule" "grafana_dashboard_accessing_prometheus_data" {
+
+  security_group_id = aws_security_group.prometheus-sg.id
+
+  referenced_security_group_id = aws_security_group.grafana-sg.id
+
+  from_port = 9090
+
+  ip_protocol = "tcp"
+
+  to_port = 9090
 
 }
 
@@ -200,6 +270,34 @@ resource "aws_vpc_security_group_ingress_rule" "grafana_ssh_from_my_ip" {
   security_group_id = aws_security_group.grafana-sg.id
 
   cidr_ipv4 = var.my_ip
+
+  from_port = 22
+
+  ip_protocol = "tcp"
+
+  to_port = 22
+
+}
+
+resource "aws_vpc_security_group_ingress_rule" "grafana_ssh_from_web" {
+
+  security_group_id = aws_security_group.grafana-sg.id
+
+  referenced_security_group_id = aws_security_group.web-sg.id
+
+  from_port = 22
+
+  ip_protocol = "tcp"
+
+  to_port = 22
+
+}
+
+resource "aws_vpc_security_group_ingress_rule" "grafana_ssh_from_prometheus" {
+
+  security_group_id = aws_security_group.grafana-sg.id
+
+  referenced_security_group_id = aws_security_group.prometheus-sg.id
 
   from_port = 22
 

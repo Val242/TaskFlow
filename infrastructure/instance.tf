@@ -4,7 +4,7 @@ resource "aws_instance" "web" {
   key_name                    = var.keypair
   vpc_security_group_ids      = [aws_security_group.web-sg.id]
   availability_zone           = var.zone1
-  associate_public_ip_address = false
+  associate_public_ip_address = true
 
   tags = {
     Name    = "Infra-web"
@@ -24,7 +24,7 @@ resource "aws_instance" "prometheus" {
   key_name                    = var.keypair
   vpc_security_group_ids      = [aws_security_group.prometheus-sg.id]
   availability_zone           = var.zone1
-  associate_public_ip_address = false
+  associate_public_ip_address = true
 
   tags = {
     Name    = "Infra-prometheus"
@@ -44,7 +44,7 @@ resource "aws_instance" "grafana" {
   key_name                    = var.keypair
   vpc_security_group_ids      = [aws_security_group.grafana-sg.id]
   availability_zone           = var.zone1
-  associate_public_ip_address = false
+  associate_public_ip_address = true
 
   tags = {
     Name    = "Infra-grafana"

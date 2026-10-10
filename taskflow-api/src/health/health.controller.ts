@@ -12,6 +12,7 @@ export class HealthController {
 
   @Get('ready')
   async getReadiness() {
+    //controller
     const result = await this.healthService.getReadiness();
 
     if (result.status === 'error') {

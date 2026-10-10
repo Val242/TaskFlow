@@ -12,7 +12,7 @@ import { MetricsService } from './metrics.service';
 export class MetricsInterceptor implements NestInterceptor {
   constructor(private readonly metricsService: MetricsService) {}
 
-  intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
+  intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     const request = context.switchToHttp().getRequest<Request>();
     const response = context.switchToHttp().getResponse<Response>();
 
@@ -23,7 +23,10 @@ export class MetricsInterceptor implements NestInterceptor {
         const duration =
           Number(process.hrtime.bigint() - start) / 1_000_000_000;
 
-        const route = request.route?.path ?? request.path;
+        const requestWithRoute = request as unknown as {
+          route?: { path?: string };
+        };
+        const route: string = requestWithRoute.route?.path ?? request.path;
 
         this.metricsService.incrementRequest(
           request.method,
